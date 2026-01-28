@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect } from 'react'
-import { chatApi, ChatResponse } from './api/client'
+import { chatApi, type ChatResponse } from './api/client'
 
 interface Message {
   id: string
@@ -45,7 +45,7 @@ function App() {
     setIsLoading(true)
 
     try {
-      const response = await chatApi(sessionId, userMessage.content)
+      const response: ChatResponse = await chatApi(sessionId, userMessage.content)
       
       const assistantMessage: Message = {
         id: crypto.randomUUID(),
