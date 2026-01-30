@@ -1,6 +1,7 @@
 """
 Application configuration using Pydantic Settings
 """
+import os
 from functools import lru_cache
 from pydantic_settings import BaseSettings
 
@@ -19,6 +20,16 @@ class Settings(BaseSettings):
     default_limit: int = 200
     max_limit: int = 200
     
+    # LLM Settings
+    openai_api_key: str = ""
+    llm_model: str = "gpt-4o-mini"
+    llm_timeout: float = 30.0
+    llm_max_retries: int = 2
+    
+    # Query Execution
+    query_timeout_seconds: float = 30.0
+    max_row_cap: int = 200
+    
     class Config:
         env_file = ".env"
         case_sensitive = False
@@ -28,3 +39,4 @@ class Settings(BaseSettings):
 def get_settings() -> Settings:
     """Get cached settings instance."""
     return Settings()
+
