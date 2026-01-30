@@ -1,5 +1,6 @@
 import React, { useState, useRef, useEffect } from 'react'
 import { chatApi, type ChatResponse } from './api/client'
+import embed from 'vega-embed'
 
 interface Message {
   id: string
@@ -8,10 +9,39 @@ interface Message {
   sql?: string | null
   assumptions?: string[]
   followUpQuestions?: string[]
+  chart?: { vega_lite_spec: Record<string, unknown> }
   metadata?: {
     row_count: number
     runtime_ms: number
   }
+}
+
+// Vega-Lite Chart Component
+function VegaChart({ spec, messageId }: { spec: Record<string, unknown>; messageId: string }) {
+  const containerRef = useRef<HTMLDivElement>(null)
+
+  useEffect(() => {
+    if (containerRef.current && spec && Object.keys(spec).length > 0) {
+      embed(containerRef.current, spec as any, {
+        actions: false,
+        renderer: 'svg',
+        width: 500,
+        height: 300,
+      }).catch((err) => {
+        console.error('Vega embed error:', err)
+      })
+    }
+  }, [spec, messageId])
+
+  if (!spec || Object.keys(spec).length === 0) {
+    return null
+  }
+
+  return (
+    <div style={styles.chartContainer}>
+      <div ref={containerRef} />
+    </div>
+  )
 }
 
 function App() {
@@ -54,6 +84,7 @@ function App() {
         sql: response.sql,
         assumptions: response.assumptions,
         followUpQuestions: response.follow_up_questions,
+        chart: response.chart,
         metadata: response.metadata,
       }
 
@@ -140,6 +171,10 @@ function App() {
                       <pre style={styles.sqlCode}>{message.sql}</pre>
                     )}
                   </div>
+                )}
+
+                {message.chart && message.chart.vega_lite_spec && Object.keys(message.chart.vega_lite_spec).length > 0 && (
+                  <VegaChart spec={message.chart.vega_lite_spec} messageId={message.id} />
                 )}
 
                 {message.assumptions && message.assumptions.length > 0 && (
@@ -298,6 +333,14 @@ const styles: { [key: string]: React.CSSProperties } = {
     fontSize: '12px',
     marginTop: '8px',
     border: '1px solid #e0e0e0',
+  },
+  chartContainer: {
+    marginTop: '16px',
+    padding: '12px',
+    backgroundColor: '#fafafa',
+    borderRadius: '8px',
+    border: '1px solid #e0e0e0',
+    overflow: 'auto',
   },
   assumptions: {
     marginTop: '12px',
