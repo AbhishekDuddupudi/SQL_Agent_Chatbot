@@ -1,11 +1,19 @@
 """
 Pharma Analyst Bot - FastAPI Main Application
 """
+import logging
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.api.health import router as health_router
 from app.api.chat import router as chat_router
+
+# Configure logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
+logger = logging.getLogger(__name__)
 
 app = FastAPI(
     title="Pharma Analyst Bot",

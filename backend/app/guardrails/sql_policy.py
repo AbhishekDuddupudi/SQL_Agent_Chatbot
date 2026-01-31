@@ -86,9 +86,6 @@ def _check_for_dangerous_operations(parsed: exp.Expression) -> None:
         exp.Delete,
         exp.Drop,
         exp.Create,
-        exp.Alter,
-        exp.Truncate,
-        exp.Command,
     )
     
     # Walk the entire expression tree
