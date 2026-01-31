@@ -16,30 +16,153 @@ interface Message {
   }
 }
 
-// Vega-Lite Chart Component
-function VegaChart({ spec, messageId }: { spec: Record<string, unknown>; messageId: string }) {
+// Vega-Lite Chart Component with error handling
+function VegaChart({ spec }: { spec: Record<string, unknown> }) {
   const containerRef = useRef<HTMLDivElement>(null)
+  const [error, setError] = useState<string | null>(null)
 
   useEffect(() => {
-    if (containerRef.current && spec && Object.keys(spec).length > 0) {
-      embed(containerRef.current, spec as any, {
-        actions: false,
-        renderer: 'svg',
-        width: 500,
-        height: 300,
-      }).catch((err) => {
-        console.error('Vega embed error:', err)
-      })
+    if (!containerRef.current || !spec || Object.keys(spec).length === 0) {
+      return
     }
-  }, [spec, messageId])
 
-  if (!spec || Object.keys(spec).length === 0) {
-    return null
+    setError(null)
+    
+    // Clear previous chart
+    containerRef.current.innerHTML = ''
+
+    embed(containerRef.current, spec as any, {
+      actions: { export: true, source: false, compiled: false, editor: false },
+      renderer: 'svg',
+    })
+      .then(() => {
+        console.log('Vega chart rendered successfully')
+      })
+      .catch((err) => {
+        console.error('Vega embed error:', err)
+        setError(`Failed to render chart: ${err.message}`)
+      })
+
+    return () => {
+      if (containerRef.current) {
+        containerRef.current.innerHTML = ''
+      }
+    }
+  }, [spec])
+
+  if (error) {
+    return (
+      <div style={styles.chartError}>
+        <span>⚠️ {error}</span>
+      </div>
+    )
+  }
+
+  return <div ref={containerRef} style={styles.vegaContainer} />
+}
+
+// Assistant Message Component with collapsible chart
+function AssistantMessageCard({
+  message,
+  expandedSql,
+  expandedChart,
+  onToggleSql,
+  onToggleChart,
+  onFollowUpClick,
+}: {
+  message: Message
+  expandedSql: boolean
+  expandedChart: boolean
+  onToggleSql: () => void
+  onToggleChart: () => void
+  onFollowUpClick: (question: string) => void
+}) {
+  const chartRef = useRef<HTMLDivElement>(null)
+
+  const hasChart = message.chart?.vega_lite_spec && 
+    Object.keys(message.chart.vega_lite_spec).length > 0
+
+  const handleChartToggle = () => {
+    const willExpand = !expandedChart
+    onToggleChart()
+    
+    // Scroll to chart after expansion
+    if (willExpand) {
+      setTimeout(() => {
+        chartRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+      }, 100)
+    }
   }
 
   return (
-    <div style={styles.chartContainer}>
-      <div ref={containerRef} />
+    <div style={{ ...styles.message, ...styles.assistantMessage }}>
+      <p style={styles.messageContent}>{message.content}</p>
+
+      {message.metadata && (
+        <div style={styles.metadata}>
+          <span>📊 {message.metadata.row_count} rows</span>
+          <span>⏱️ {message.metadata.runtime_ms}ms</span>
+        </div>
+      )}
+
+      {/* Action Buttons */}
+      <div style={styles.actionButtons}>
+        {message.sql && (
+          <button style={styles.toggleButton} onClick={onToggleSql}>
+            {expandedSql ? '▼ Hide SQL' : '▶ Show SQL'}
+          </button>
+        )}
+        {hasChart && (
+          <button 
+            style={{ ...styles.toggleButton, ...styles.chartToggleButton }} 
+            onClick={handleChartToggle}
+          >
+            {expandedChart ? '▼ Hide Chart' : '📈 Show Chart'}
+          </button>
+        )}
+      </div>
+
+      {/* Collapsible SQL Section */}
+      {expandedSql && message.sql && (
+        <div style={styles.sqlSection}>
+          <pre style={styles.sqlCode}>{message.sql}</pre>
+        </div>
+      )}
+
+      {/* Collapsible Chart Section */}
+      {expandedChart && hasChart && (
+        <div ref={chartRef} style={styles.chartSection}>
+          <VegaChart spec={message.chart!.vega_lite_spec} />
+        </div>
+      )}
+
+      {message.assumptions && message.assumptions.length > 0 && (
+        <div style={styles.assumptions}>
+          <strong>Assumptions:</strong>
+          <ul>
+            {message.assumptions.map((a, i) => (
+              <li key={i}>{a}</li>
+            ))}
+          </ul>
+        </div>
+      )}
+
+      {message.followUpQuestions && message.followUpQuestions.length > 0 && (
+        <div style={styles.followUps}>
+          <strong>Follow-up questions:</strong>
+          <div style={styles.followUpButtons}>
+            {message.followUpQuestions.map((q, i) => (
+              <button
+                key={i}
+                style={styles.followUpButton}
+                onClick={() => onFollowUpClick(q)}
+              >
+                {q}
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
     </div>
   )
 }
@@ -50,6 +173,7 @@ function App() {
   const [isLoading, setIsLoading] = useState(false)
   const [sessionId] = useState(() => crypto.randomUUID())
   const [expandedSql, setExpandedSql] = useState<string | null>(null)
+  const [expandedChart, setExpandedChart] = useState<string | null>(null)
   const messagesEndRef = useRef<HTMLDivElement>(null)
 
   const scrollToBottom = () => {
@@ -109,6 +233,10 @@ function App() {
     setExpandedSql(expandedSql === messageId ? null : messageId)
   }
 
+  const toggleChartPanel = (messageId: string) => {
+    setExpandedChart(expandedChart === messageId ? null : messageId)
+  }
+
   return (
     <div style={styles.container}>
       <header style={styles.header}>
@@ -144,67 +272,20 @@ function App() {
                 justifyContent: message.role === 'user' ? 'flex-end' : 'flex-start',
               }}
             >
-              <div
-                style={{
-                  ...styles.message,
-                  ...(message.role === 'user' ? styles.userMessage : styles.assistantMessage),
-                }}
-              >
-                <p style={styles.messageContent}>{message.content}</p>
-
-                {message.metadata && (
-                  <div style={styles.metadata}>
-                    <span>📊 {message.metadata.row_count} rows</span>
-                    <span>⏱️ {message.metadata.runtime_ms}ms</span>
-                  </div>
-                )}
-
-                {message.sql && (
-                  <div style={styles.sqlSection}>
-                    <button
-                      style={styles.sqlToggle}
-                      onClick={() => toggleSqlPanel(message.id)}
-                    >
-                      {expandedSql === message.id ? '▼ Hide SQL' : '▶ Show SQL'}
-                    </button>
-                    {expandedSql === message.id && (
-                      <pre style={styles.sqlCode}>{message.sql}</pre>
-                    )}
-                  </div>
-                )}
-
-                {message.chart && message.chart.vega_lite_spec && Object.keys(message.chart.vega_lite_spec).length > 0 && (
-                  <VegaChart spec={message.chart.vega_lite_spec} messageId={message.id} />
-                )}
-
-                {message.assumptions && message.assumptions.length > 0 && (
-                  <div style={styles.assumptions}>
-                    <strong>Assumptions:</strong>
-                    <ul>
-                      {message.assumptions.map((a, i) => (
-                        <li key={i}>{a}</li>
-                      ))}
-                    </ul>
-                  </div>
-                )}
-
-                {message.followUpQuestions && message.followUpQuestions.length > 0 && (
-                  <div style={styles.followUps}>
-                    <strong>Follow-up questions:</strong>
-                    <div style={styles.followUpButtons}>
-                      {message.followUpQuestions.map((q, i) => (
-                        <button
-                          key={i}
-                          style={styles.followUpButton}
-                          onClick={() => handleFollowUpClick(q)}
-                        >
-                          {q}
-                        </button>
-                      ))}
-                    </div>
-                  </div>
-                )}
-              </div>
+              {message.role === 'user' ? (
+                <div style={{ ...styles.message, ...styles.userMessage }}>
+                  <p style={styles.messageContent}>{message.content}</p>
+                </div>
+              ) : (
+                <AssistantMessageCard
+                  message={message}
+                  expandedSql={expandedSql === message.id}
+                  expandedChart={expandedChart === message.id}
+                  onToggleSql={() => toggleSqlPanel(message.id)}
+                  onToggleChart={() => toggleChartPanel(message.id)}
+                  onFollowUpClick={handleFollowUpClick}
+                />
+              )}
             </div>
           ))}
 
@@ -311,44 +392,80 @@ const styles: { [key: string]: React.CSSProperties } = {
     display: 'flex',
     gap: '16px',
     marginTop: '8px',
+    paddingBottom: '8px',
+    borderBottom: '1px solid #eee',
     fontSize: '12px',
     color: '#666',
+  },
+  actionButtons: {
+    display: 'flex',
+    gap: '8px',
+    marginTop: '10px',
+    flexWrap: 'wrap',
+  },
+  toggleButton: {
+    background: 'none',
+    border: '1px solid #ddd',
+    borderRadius: '6px',
+    color: '#1a73e8',
+    cursor: 'pointer',
+    padding: '6px 12px',
+    fontSize: '13px',
+    fontWeight: 500,
+  },
+  chartToggleButton: {
+    backgroundColor: '#f0fdf4',
+    borderColor: '#86efac',
+    color: '#16a34a',
   },
   sqlSection: {
     marginTop: '12px',
   },
-  sqlToggle: {
-    background: 'none',
-    border: 'none',
-    color: '#1a73e8',
-    cursor: 'pointer',
-    padding: '4px 0',
-    fontSize: '13px',
-  },
   sqlCode: {
-    backgroundColor: '#f5f5f5',
+    backgroundColor: '#1e293b',
+    color: '#e2e8f0',
     padding: '12px',
-    borderRadius: '6px',
+    borderRadius: '8px',
     overflow: 'auto',
     fontSize: '12px',
-    marginTop: '8px',
-    border: '1px solid #e0e0e0',
+    fontFamily: "'Fira Code', 'Monaco', 'Consolas', monospace",
+    lineHeight: 1.5,
+    whiteSpace: 'pre-wrap',
+    wordBreak: 'break-word',
   },
-  chartContainer: {
-    marginTop: '16px',
-    padding: '12px',
+  chartSection: {
+    marginTop: '12px',
+    padding: '16px',
     backgroundColor: '#fafafa',
     borderRadius: '8px',
-    border: '1px solid #e0e0e0',
+    border: '1px solid #e5e7eb',
+  },
+  vegaContainer: {
+    width: '100%',
+    display: 'flex',
+    justifyContent: 'center',
     overflow: 'auto',
+  },
+  chartError: {
+    padding: '12px',
+    backgroundColor: '#fef2f2',
+    border: '1px solid #fecaca',
+    borderRadius: '8px',
+    color: '#dc2626',
+    fontSize: '13px',
+    textAlign: 'center',
   },
   assumptions: {
     marginTop: '12px',
+    paddingTop: '12px',
+    borderTop: '1px solid #eee',
     fontSize: '13px',
     color: '#666',
   },
   followUps: {
     marginTop: '12px',
+    paddingTop: '12px',
+    borderTop: '1px solid #eee',
   },
   followUpButtons: {
     display: 'flex',

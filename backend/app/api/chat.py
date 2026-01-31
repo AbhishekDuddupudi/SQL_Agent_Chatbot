@@ -3,6 +3,7 @@ Chat endpoint for Pharma Analyst Bot
 """
 import time
 import uuid
+import logging
 from typing import Optional, List, Dict, Any
 
 from fastapi import APIRouter
@@ -11,6 +12,8 @@ from pydantic import BaseModel
 from app.agent.workflow import run_agent
 from app.audit.repo import insert_audit_log
 from app.services.llm import is_llm_available
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
@@ -91,6 +94,8 @@ async def chat(request: ChatRequest):
         follow_ups = result.get("follow_up_questions", [])
         row_count = result.get("row_count", 0)
         runtime_ms = result.get("runtime_ms", int((time.time() - start_time) * 1000))
+        
+        logger.info(f"Chat API: vega_spec has content={bool(vega_spec)}, keys={list(vega_spec.keys()) if vega_spec else []}")
         
         # Determine status for audit
         error_text = None

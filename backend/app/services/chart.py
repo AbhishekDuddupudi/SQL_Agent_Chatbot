@@ -1,7 +1,11 @@
 """
 Vega-Lite chart specification generator.
 """
+import logging
 from typing import List, Dict, Any, Optional
+from decimal import Decimal
+
+logger = logging.getLogger(__name__)
 
 
 def generate_chart_spec(
@@ -20,7 +24,10 @@ def generate_chart_spec(
     Returns:
         Vega-Lite specification dict, or empty dict if no chart is appropriate
     """
+    logger.info(f"generate_chart_spec called: columns={columns}, row_count={len(rows) if rows else 0}")
+    
     if not rows or not columns:
+        logger.warning("No rows or columns, returning empty chart spec")
         return {}
     
     # Limit data for visualization
@@ -32,6 +39,8 @@ def generate_chart_spec(
     date_cols = []
     
     first_row = rows[0]
+    logger.info(f"First row sample: {first_row}")
+    
     for col in columns:
         val = first_row.get(col)
         if val is None:
@@ -43,18 +52,21 @@ def generate_chart_spec(
         
         if val is None:
             categorical_cols.append(col)
-        elif isinstance(val, (int, float)):
+        elif isinstance(val, (int, float, Decimal)):
             numeric_cols.append(col)
         elif _is_date_like(col, val):
             date_cols.append(col)
         else:
             categorical_cols.append(col)
     
+    logger.info(f"Column classification: numeric={numeric_cols}, categorical={categorical_cols}, date={date_cols}")
+    
     # Decide chart type based on data shape
     chart_spec = _select_chart_type(
         display_data, columns, numeric_cols, categorical_cols, date_cols, sql
     )
     
+    logger.info(f"Generated chart spec: {bool(chart_spec)}")
     return chart_spec
 
 
@@ -83,31 +95,42 @@ def _select_chart_type(
     sql: Optional[str]
 ) -> Dict[str, Any]:
     """Select and build appropriate chart type."""
+    logger.info(f"_select_chart_type: data_len={len(data)}, numeric={numeric_cols}, categorical={categorical_cols}")
     
-    # Skip charts for very small or very large datasets
-    if len(data) < 2 or len(data) > 100:
-        if len(data) > 100:
-            data = data[:50]
-        elif len(data) < 2:
-            return {}
+    # Skip charts for single row
+    if len(data) < 1:
+        logger.warning("Not enough data for chart")
+        return {}
+    
+    # Truncate large datasets
+    if len(data) > 50:
+        data = data[:50]
     
     # Time series: date column + numeric column
     if date_cols and numeric_cols:
+        logger.info("Building line chart (time series)")
         return _build_line_chart(data, date_cols[0], numeric_cols[0])
     
     # Bar chart: categorical + numeric
     if categorical_cols and numeric_cols:
-        # Prefer revenue/sales/count columns
         y_col = _pick_best_numeric(numeric_cols)
         x_col = _pick_best_categorical(categorical_cols)
+        logger.info(f"Building bar chart with x={x_col}, y={y_col}")
         return _build_bar_chart(data, x_col, y_col)
     
-    # Just numeric columns: simple bar chart with index
-    if numeric_cols and len(data) <= 20:
-        # Use first column as label if it's text-like
-        if columns and columns[0] in categorical_cols:
-            return _build_bar_chart(data, columns[0], numeric_cols[0])
+    # Just numeric columns: use first column as labels
+    if numeric_cols and len(columns) >= 2:
+        x_col = columns[0]
+        y_col = numeric_cols[0]
+        logger.info(f"Building bar chart (numeric only) with x={x_col}, y={y_col}")
+        return _build_bar_chart(data, x_col, y_col)
     
+    # Fallback: use first two columns
+    if len(columns) >= 2:
+        logger.info(f"Fallback bar chart with first two columns: {columns[0]}, {columns[1]}")
+        return _build_bar_chart(data, columns[0], columns[1])
+    
+    logger.warning("Could not determine chart type")
     return {}
 
 

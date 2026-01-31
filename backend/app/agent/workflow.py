@@ -345,6 +345,9 @@ def finalize_response_node(state: AgentState) -> AgentState:
     """
     Finalize the response with LLM-generated answer and chart.
     """
+    import logging
+    logger = logging.getLogger(__name__)
+    
     from app.services.llm import is_llm_available, LLMError
     from app.services.answer import generate_answer, generate_error_answer
     from app.services.chart import generate_chart_spec
@@ -352,6 +355,8 @@ def finalize_response_node(state: AgentState) -> AgentState:
     
     # Calculate runtime
     runtime_ms = int((time.time() - state["start_time"]) * 1000)
+    
+    logger.info(f"finalize_response_node: rows={len(state.get('rows', []))}, columns={state.get('columns', [])}")
     
     # Check for refusal
     if state.get("refusal_flag"):
@@ -434,11 +439,13 @@ def finalize_response_node(state: AgentState) -> AgentState:
         }
     
     # Generate chart
+    logger.info(f"Generating chart with columns={state.get('columns', [])}, row_count={len(state.get('rows', []))}")
     vega_spec = generate_chart_spec(
         columns=state.get("columns", []),
         rows=state.get("rows", []),
         sql=state.get("sql_candidate")
     )
+    logger.info(f"Generated vega_spec: has_content={bool(vega_spec)}, keys={list(vega_spec.keys()) if vega_spec else []}")
     
     # Generate follow-up questions
     follow_ups = _generate_follow_ups(state.get("sql_candidate") or "", state.get("columns", []))
