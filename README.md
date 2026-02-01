@@ -2,7 +2,13 @@
 
 A LangGraph-based Text-to-SQL agent for pharmaceutical analytics, built with FastAPI, PostgreSQL, and React.
 
-## Features
+![Python](https://img.shields.io/badge/Python-3.11+-blue)
+![FastAPI](https://img.shields.io/badge/FastAPI-0.109+-green)
+![React](https://img.shields.io/badge/React-18+-blue)
+![PostgreSQL](https://img.shields.io/badge/PostgreSQL-15+-blue)
+![LangGraph](https://img.shields.io/badge/LangGraph-0.0.26+-purple)
+
+## ✨ Features
 
 - **Natural Language to SQL**: Ask questions in plain English and get SQL queries automatically generated
 - **LangGraph Workflow**: Multi-step agent with preprocessing, validation, retry logic, and summarization
@@ -12,71 +18,58 @@ A LangGraph-based Text-to-SQL agent for pharmaceutical analytics, built with Fas
   - Schema allowlist enforcement
   - Dangerous pattern detection
   - Sensitive data protection
-- **Vega-Lite Charts**: Automatic visualization of query results
+- **Vega-Lite Charts**: Automatic visualization of query results (bar, line, pie charts)
+- **Collapsible Chart Display**: Charts shown on-demand with smooth scrolling
 - **Audit Logging**: Every request is logged for compliance and debugging
-- **LLM-Based Summarization**: Business-friendly answers powered by OpenAI
+- **LLM-Based Summarization**: Business-friendly answers powered by OpenAI GPT-4
 
-## Architecture
+## 🏗️ Architecture
+
+### LangGraph Workflow
+
+The agent uses a sophisticated 9-node LangGraph workflow with multiple decision points and retry logic:
+
+![Workflow Diagram](workflow_diagram.png)
+
+### Workflow Components
+
+| Node | Description |
+|------|-------------|
+| **Preprocess** | Normalizes user question (whitespace, punctuation) |
+| **Scope & Policy** | Checks for sensitive/disallowed requests and ambiguity |
+| **Clarify** | Generates clarifying questions for ambiguous input |
+| **Schema Ground** | Maps question to relevant database tables/columns |
+| **Generate SQL** | Uses OpenAI LLM to generate PostgreSQL query |
+| **Validate SQL** | Enforces SELECT-only, no SELECT *, schema allowlist |
+| **Fix & Retry** | Attempts to fix invalid SQL (max 3 retries) |
+| **Execute** | Runs validated SQL against PostgreSQL database |
+| **Finalize** | Generates LLM summary, Vega-Lite chart, follow-up questions |
+
+### System Architecture
 
 ```
-User Question
-    │
-    ▼
-┌─────────────────────┐
-│ Preprocess & Normalize │
-└─────────────────────┘
-    │
-    ▼
-┌─────────────────────┐
-│ Scope & Policy Check │──▶ Refuse (if disallowed)
-└─────────────────────┘
-    │ ambiguous?
-    ▼
-┌─────────────────────┐
-│ Clarifying Questions │──▶ END (sql=null, follow_ups filled)
-└─────────────────────┘
-    │
-    ▼
-┌─────────────────────┐
-│ Schema Grounding     │
-└─────────────────────┘
-    │
-    ▼
-┌─────────────────────┐
-│ Generate SQL (LLM)   │◀──┐
-└─────────────────────┘    │
-    │                      │
-    ▼                      │
-┌─────────────────────┐    │
-│ Validate SQL         │    │
-└─────────────────────┘    │
-    │ error?               │
-    ▼                      │
-┌─────────────────────┐    │
-│ Fix & Retry (max 3)  │───┘
-└─────────────────────┘
-    │
-    ▼
-┌─────────────────────┐
-│ Execute Query        │
-└─────────────────────┘
-    │
-    ▼
-┌─────────────────────┐
-│ Finalize Response    │
-│ (LLM Summary + Chart)│
-└─────────────────────┘
-    │
-    ▼
-   END
+┌─────────────────┐     ┌─────────────────┐     ┌─────────────────┐
+│                 │     │                 │     │                 │
+│  React Frontend │────▶│  FastAPI Backend│────▶│   PostgreSQL    │
+│  (Vite + TS)    │     │  (LangGraph)    │     │   Database      │
+│                 │◀────│                 │◀────│                 │
+└─────────────────┘     └────────┬────────┘     └─────────────────┘
+                                 │
+                                 ▼
+                        ┌─────────────────┐
+                        │   OpenAI API    │
+                        │    (GPT-4)      │
+                        └─────────────────┘
 ```
 
-## Prerequisites
+## 🚀 Quick Start
+
+### Prerequisites
 
 - Docker and Docker Compose
-- OpenAI API Key (required for LLM-based SQL generation and summarization)
+- OpenAI API Key ([Get one here](https://platform.openai.com/api-keys))
 
-## Quick Start
+### Setup Instructions
 
 1. **Clone the repository**
    ```bash
@@ -90,7 +83,7 @@ User Question
    ```
    
    Edit `.env` and add your OpenAI API key:
-   ```
+   ```env
    OPENAI_API_KEY=sk-your-actual-api-key-here
    ```
 
@@ -205,7 +198,60 @@ npm install
 npm run dev
 ```
 
-## Troubleshooting
+## 🧪 Testing
+
+Run backend tests:
+```bash
+cd backend
+pytest tests/ -v
+```
+
+## 🔧 Development
+
+### Regenerate Workflow Diagram
+
+To regenerate the workflow diagram PNG:
+
+```bash
+# Activate virtual environment
+source .venv/bin/activate
+
+# Generate the diagram
+python backend/generate_workflow_graph.py
+```
+
+This will create `workflow_diagram.png` in the project root.
+
+**Requirements for PNG generation:**
+- macOS: `brew install graphviz`
+- Ubuntu: `sudo apt-get install graphviz`
+- Python: `pip install pygraphviz`
+
+### Running Locally (Without Docker)
+
+**Backend:**
+```bash
+cd backend
+python -m venv venv
+source venv/bin/activate
+pip install -r requirements.txt
+uvicorn app.main:app --reload --port 8000
+```
+
+**Frontend:**
+```bash
+cd frontend
+npm install
+npm run dev
+```
+
+**Database:**
+```bash
+# Use Docker for PostgreSQL
+docker compose up db
+```
+
+## 🐛 Troubleshooting
 
 ### "LLM summarization is required but not available"
 - Ensure `OPENAI_API_KEY` is set in your `.env` file
@@ -224,14 +270,11 @@ npm run dev
 - Avoid SELECT * - specify columns explicitly
 - Check that table/column names match the schema
 
-## Testing
+### Charts not displaying
+- Click "📈 Show Chart" button to display the chart
+- Check browser console (F12) for JavaScript errors
+- Verify the backend response includes `chart.vega_lite_spec`
 
-Run backend tests:
-```bash
-cd backend
-pytest tests/ -v
-```
-
-## License
+## 📄 License
 
 MIT
