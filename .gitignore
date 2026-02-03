@@ -33,3 +33,11 @@ yarn-error.log*
 # --- IDE ---
 .vscode/
 .idea/
+# ignore deps/build
+node_modules/
+frontend/node_modules/
+frontend/dist/
+dist/
+.venv/
+__pycache__/
+.env
