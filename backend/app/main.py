@@ -7,6 +7,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.api.health import router as health_router
 from app.api.chat import router as chat_router
+from app.api.streaming import router as streaming_router
 
 # Configure logging
 logging.basicConfig(
@@ -33,6 +34,7 @@ app.add_middleware(
 # Include routers
 app.include_router(health_router, prefix="/api", tags=["Health"])
 app.include_router(chat_router, prefix="/api", tags=["Chat"])
+app.include_router(streaming_router, prefix="/api", tags=["Chat Streaming"])
 
 
 @app.on_event("startup")

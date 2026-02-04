@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect } from 'react'
-import { chatApi, type ChatResponse } from './api/client'
+import { chatApiStream, type ChatResponse } from './api/client'
 import embed from 'vega-embed'
 
 interface Message {
@@ -14,6 +14,8 @@ interface Message {
     row_count: number
     runtime_ms: number
   }
+  isStreaming?: boolean
+  statusMessage?: string
 }
 
 // Vega-Lite Chart Component with error handling
@@ -31,8 +33,8 @@ function VegaChart({ spec }: { spec: Record<string, unknown> }) {
     // Clear previous chart
     containerRef.current.innerHTML = ''
 
-    embed(containerRef.current, spec as any, {
-      actions: { export: true, source: false, compiled: false, editor: false },
+    embed(containerRef.current, spec as Parameters<typeof embed>[1], {
+      actions: { export: true, source: false, compiled: false, editor: false } as any,
       renderer: 'svg',
     })
       .then(() => {
@@ -92,6 +94,29 @@ function AssistantMessageCard({
         chartRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' })
       }, 100)
     }
+  }
+
+  // If still streaming, show status
+  if (message.isStreaming) {
+    return (
+      <div style={{ ...styles.message, ...styles.assistantMessage }}>
+        {message.statusMessage && (
+          <div style={styles.statusLine}>
+            <span style={styles.statusDot}>●</span>
+            <span>{message.statusMessage}</span>
+          </div>
+        )}
+        {message.content && (
+          <p style={styles.messageContent}>
+            {message.content}
+            <span style={styles.cursor}>▌</span>
+          </p>
+        )}
+        {!message.content && !message.statusMessage && (
+          <p style={styles.loadingText}>Connecting...</p>
+        )}
+      </div>
+    )
   }
 
   return (
@@ -194,32 +219,92 @@ function App() {
       content: input.trim(),
     }
 
-    setMessages((prev) => [...prev, userMessage])
+    const assistantMessageId = crypto.randomUUID()
+    
+    // Create initial streaming message
+    const streamingMessage: Message = {
+      id: assistantMessageId,
+      role: 'assistant',
+      content: '',
+      isStreaming: true,
+      statusMessage: 'Connecting...',
+    }
+
+    setMessages((prev) => [...prev, userMessage, streamingMessage])
     setInput('')
     setIsLoading(true)
 
     try {
-      const response: ChatResponse = await chatApi(sessionId, userMessage.content)
-      
-      const assistantMessage: Message = {
-        id: crypto.randomUUID(),
-        role: 'assistant',
-        content: response.answer,
-        sql: response.sql,
-        assumptions: response.assumptions,
-        followUpQuestions: response.follow_up_questions,
-        chart: response.chart,
-        metadata: response.metadata,
-      }
-
-      setMessages((prev) => [...prev, assistantMessage])
+      await chatApiStream(
+        sessionId,
+        userMessage.content,
+        {
+          onStatus: (_step, message) => {
+            setMessages((prev) =>
+              prev.map((m) =>
+                m.id === assistantMessageId
+                  ? { ...m, statusMessage: message }
+                  : m
+              )
+            )
+          },
+          onToken: (token) => {
+            setMessages((prev) =>
+              prev.map((m) =>
+                m.id === assistantMessageId
+                  ? { ...m, content: m.content + token, statusMessage: undefined }
+                  : m
+              )
+            )
+          },
+          onComplete: (response: ChatResponse) => {
+            setMessages((prev) =>
+              prev.map((m) =>
+                m.id === assistantMessageId
+                  ? {
+                      ...m,
+                      content: response.answer,
+                      sql: response.sql,
+                      assumptions: response.assumptions,
+                      followUpQuestions: response.follow_up_questions,
+                      chart: response.chart,
+                      metadata: response.metadata,
+                      isStreaming: false,
+                      statusMessage: undefined,
+                    }
+                  : m
+              )
+            )
+          },
+          onError: (error) => {
+            setMessages((prev) =>
+              prev.map((m) =>
+                m.id === assistantMessageId
+                  ? {
+                      ...m,
+                      content: `Error: ${error}`,
+                      isStreaming: false,
+                      statusMessage: undefined,
+                    }
+                  : m
+              )
+            )
+          },
+        }
+      )
     } catch (error) {
-      const errorMessage: Message = {
-        id: crypto.randomUUID(),
-        role: 'assistant',
-        content: 'Sorry, something went wrong. Please try again.',
-      }
-      setMessages((prev) => [...prev, errorMessage])
+      setMessages((prev) =>
+        prev.map((m) =>
+          m.id === assistantMessageId
+            ? {
+                ...m,
+                content: 'Sorry, something went wrong. Please try again.',
+                isStreaming: false,
+                statusMessage: undefined,
+              }
+            : m
+        )
+      )
     } finally {
       setIsLoading(false)
     }
@@ -291,9 +376,7 @@ function App() {
 
           {isLoading && (
             <div style={styles.messageWrapper}>
-              <div style={{ ...styles.message, ...styles.assistantMessage }}>
-                <p style={styles.loadingText}>Thinking...</p>
-              </div>
+              {/* Status shown via streaming message */}
             </div>
           )}
 
@@ -512,6 +595,25 @@ const styles: { [key: string]: React.CSSProperties } = {
     margin: 0,
     fontStyle: 'italic',
     color: '#666',
+  },
+  statusLine: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: '8px',
+    marginBottom: '8px',
+    padding: '8px 12px',
+    backgroundColor: '#f0f9ff',
+    borderRadius: '6px',
+    fontSize: '13px',
+    color: '#0369a1',
+  },
+  statusDot: {
+    color: '#0ea5e9',
+    animation: 'pulse 1.5s ease-in-out infinite',
+  },
+  cursor: {
+    animation: 'blink 1s step-end infinite',
+    color: '#1a73e8',
   },
 }
 
