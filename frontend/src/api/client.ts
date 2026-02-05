@@ -5,6 +5,27 @@
 // Use relative URL for proxy, or absolute URL if VITE_API_URL is set
 const API_BASE_URL = import.meta.env.VITE_API_URL || ''
 
+// ============ Auth Types ============
+
+export interface User {
+  id: number
+  email: string
+  display_name: string
+}
+
+export interface LoginRequest {
+  email: string
+  password: string
+}
+
+export interface LoginResponse {
+  success: boolean
+  user: User | null
+  message: string
+}
+
+// ============ Chat Types ============
+
 export interface ChatRequest {
   session_id?: string
   message: string
@@ -87,7 +108,9 @@ export interface StreamCallbacks {
  * Check API health status
  */
 export async function healthCheck(): Promise<HealthResponse> {
-  const response = await fetch(`${API_BASE_URL}/api/health`)
+  const response = await fetch(`${API_BASE_URL}/api/health`, {
+    credentials: 'include',
+  })
   
   if (!response.ok) {
     throw new Error(`Health check failed: ${response.statusText}`)
@@ -95,6 +118,60 @@ export async function healthCheck(): Promise<HealthResponse> {
   
   return response.json()
 }
+
+// ============ Auth API ============
+
+/**
+ * Login with email and password
+ */
+export async function login(email: string, password: string): Promise<LoginResponse> {
+  const response = await fetch(`${API_BASE_URL}/api/auth/login`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    credentials: 'include', // Important: include cookies
+    body: JSON.stringify({ email, password }),
+  })
+
+  if (!response.ok) {
+    throw new Error(`Login failed: ${response.statusText}`)
+  }
+
+  return response.json()
+}
+
+/**
+ * Logout current user
+ */
+export async function logout(): Promise<void> {
+  const response = await fetch(`${API_BASE_URL}/api/auth/logout`, {
+    method: 'POST',
+    credentials: 'include',
+  })
+
+  if (!response.ok) {
+    throw new Error(`Logout failed: ${response.statusText}`)
+  }
+}
+
+/**
+ * Get current logged-in user
+ */
+export async function getCurrentUser(): Promise<User | null> {
+  const response = await fetch(`${API_BASE_URL}/api/auth/me`, {
+    credentials: 'include',
+  })
+
+  if (!response.ok) {
+    return null
+  }
+
+  const data = await response.json()
+  return data
+}
+
+// ============ Chat API ============
 
 /**
  * Send a chat message and get a response (non-streaming)
@@ -113,10 +190,14 @@ export async function chatApi(
     headers: {
       'Content-Type': 'application/json',
     },
+    credentials: 'include', // Important: include cookies for auth
     body: JSON.stringify(request),
   })
 
   if (!response.ok) {
+    if (response.status === 401) {
+      throw new Error('Not authenticated')
+    }
     const errorText = await response.text()
     throw new Error(`Chat request failed: ${response.statusText} - ${errorText}`)
   }
@@ -172,10 +253,14 @@ export async function chatApiStream(
       'Content-Type': 'application/json',
       'Accept': 'text/event-stream',
     },
+    credentials: 'include', // Important: include cookies for auth
     body: JSON.stringify(request),
   })
 
   if (!response.ok) {
+    if (response.status === 401) {
+      throw new Error('Not authenticated')
+    }
     const errorText = await response.text()
     throw new Error(`Chat stream request failed: ${response.statusText} - ${errorText}`)
   }
@@ -238,6 +323,9 @@ export async function chatApiStream(
 
 export default {
   healthCheck,
+  login,
+  logout,
+  getCurrentUser,
   chatApi,
   chatApiStream,
 }

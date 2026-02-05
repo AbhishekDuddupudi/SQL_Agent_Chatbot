@@ -8,6 +8,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.api.health import router as health_router
 from app.api.chat import router as chat_router
 from app.api.streaming import router as streaming_router
+from app.api.auth import router as auth_router
 
 # Configure logging
 logging.basicConfig(
@@ -22,10 +23,10 @@ app = FastAPI(
     version="1.0.0"
 )
 
-# CORS middleware for frontend
+# CORS middleware for frontend (credentials required for cookies)
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173", "http://frontend:5173"],
+    allow_origins=["http://localhost:5173", "http://localhost:5174", "http://frontend:5173"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -33,6 +34,7 @@ app.add_middleware(
 
 # Include routers
 app.include_router(health_router, prefix="/api", tags=["Health"])
+app.include_router(auth_router, prefix="/api", tags=["Auth"])
 app.include_router(chat_router, prefix="/api", tags=["Chat"])
 app.include_router(streaming_router, prefix="/api", tags=["Chat Streaming"])
 

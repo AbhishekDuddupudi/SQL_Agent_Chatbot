@@ -1,6 +1,7 @@
 import React, { useState, useRef, useEffect } from 'react'
-import { chatApiStream, type ChatResponse } from './api/client'
+import { chatApiStream, getCurrentUser, logout, type ChatResponse, type User } from './api/client'
 import embed from 'vega-embed'
+import LoginPage from './LoginPage'
 
 interface Message {
   id: string
@@ -193,6 +194,11 @@ function AssistantMessageCard({
 }
 
 function App() {
+  // Auth state
+  const [user, setUser] = useState<User | null>(null)
+  const [authLoading, setAuthLoading] = useState(true)
+  
+  // Chat state
   const [messages, setMessages] = useState<Message[]>([])
   const [input, setInput] = useState('')
   const [isLoading, setIsLoading] = useState(false)
@@ -201,6 +207,21 @@ function App() {
   const [expandedChart, setExpandedChart] = useState<string | null>(null)
   const messagesEndRef = useRef<HTMLDivElement>(null)
 
+  // Check for existing session on mount
+  useEffect(() => {
+    const checkAuth = async () => {
+      try {
+        const currentUser = await getCurrentUser()
+        setUser(currentUser)
+      } catch (err) {
+        console.error('Auth check failed:', err)
+      } finally {
+        setAuthLoading(false)
+      }
+    }
+    checkAuth()
+  }, [])
+
   const scrollToBottom = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' })
   }
@@ -208,6 +229,16 @@ function App() {
   useEffect(() => {
     scrollToBottom()
   }, [messages])
+
+  const handleLogout = async () => {
+    try {
+      await logout()
+      setUser(null)
+      setMessages([])
+    } catch (err) {
+      console.error('Logout failed:', err)
+    }
+  }
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
@@ -322,11 +353,35 @@ function App() {
     setExpandedChart(expandedChart === messageId ? null : messageId)
   }
 
+  // Show loading while checking auth
+  if (authLoading) {
+    return (
+      <div style={styles.loadingContainer}>
+        <div style={styles.loadingSpinner}>Loading...</div>
+      </div>
+    )
+  }
+
+  // Show login page if not authenticated
+  if (!user) {
+    return <LoginPage onLoginSuccess={setUser} />
+  }
+
   return (
     <div style={styles.container}>
       <header style={styles.header}>
-        <h1 style={styles.title}>🧬 Pharma Analyst Bot</h1>
-        <p style={styles.subtitle}>Ask questions about pharmaceutical sales data</p>
+        <div style={styles.headerContent}>
+          <div>
+            <h1 style={styles.title}>🧬 Pharma Analyst Bot</h1>
+            <p style={styles.subtitle}>Ask questions about pharmaceutical sales data</p>
+          </div>
+          <div style={styles.userInfo}>
+            <span style={styles.userName}>👤 {user.display_name}</span>
+            <button onClick={handleLogout} style={styles.logoutButton}>
+              Logout
+            </button>
+          </div>
+        </div>
       </header>
 
       <main style={styles.chatContainer}>
@@ -408,20 +463,55 @@ const styles: { [key: string]: React.CSSProperties } = {
     flexDirection: 'column',
     backgroundColor: '#f5f7fa',
   },
+  loadingContainer: {
+    minHeight: '100vh',
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#f5f7fa',
+  },
+  loadingSpinner: {
+    fontSize: '18px',
+    color: '#666',
+  },
   header: {
     backgroundColor: '#1a73e8',
     color: 'white',
-    padding: '20px',
-    textAlign: 'center',
+    padding: '16px 20px',
+  },
+  headerContent: {
+    display: 'flex',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    maxWidth: '1200px',
+    margin: '0 auto',
   },
   title: {
     margin: 0,
     fontSize: '24px',
   },
   subtitle: {
-    margin: '8px 0 0',
+    margin: '4px 0 0',
     fontSize: '14px',
     opacity: 0.9,
+  },
+  userInfo: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: '12px',
+  },
+  userName: {
+    fontSize: '14px',
+    opacity: 0.9,
+  },
+  logoutButton: {
+    padding: '8px 16px',
+    backgroundColor: 'rgba(255, 255, 255, 0.2)',
+    color: 'white',
+    border: '1px solid rgba(255, 255, 255, 0.3)',
+    borderRadius: '6px',
+    fontSize: '13px',
+    cursor: 'pointer',
   },
   chatContainer: {
     flex: 1,

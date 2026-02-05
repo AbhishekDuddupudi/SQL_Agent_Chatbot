@@ -8,9 +8,11 @@ import logging
 import asyncio
 from typing import Optional, AsyncGenerator, Dict, Any, List
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Request, Depends
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
+
+from app.api.auth import require_auth
 
 logger = logging.getLogger(__name__)
 
@@ -443,9 +445,10 @@ async def stream_chat_response(
 
 
 @router.post("/chat/stream")
-async def chat_stream(request: StreamChatRequest):
+async def chat_stream(request: StreamChatRequest, http_request: Request, user: dict = Depends(require_auth)):
     """
     Stream chat response using Server-Sent Events.
+    Requires authentication.
     
     Events:
     - status: Workflow progress updates (analyzing_question, generating_sql, executing_sql, summarizing_answer)
@@ -455,7 +458,8 @@ async def chat_stream(request: StreamChatRequest):
     
     All events include request_id for debugging.
     """
-    session_id = request.session_id or str(uuid.uuid4())
+    # Use user ID as part of session for per-user tracking
+    session_id = request.session_id or f"user_{user['id']}_{uuid.uuid4()}"
     request_id = str(uuid.uuid4())
     message = request.message.strip()
     

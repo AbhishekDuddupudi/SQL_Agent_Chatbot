@@ -6,12 +6,13 @@ import uuid
 import logging
 from typing import Optional, List, Dict, Any
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Request, Depends
 from pydantic import BaseModel
 
 from app.agent.workflow import run_agent
 from app.audit.repo import insert_audit_log
 from app.services.llm import is_llm_available
+from app.api.auth import require_auth
 
 logger = logging.getLogger(__name__)
 
@@ -42,9 +43,10 @@ class ChatResponse(BaseModel):
 
 
 @router.post("/chat", response_model=ChatResponse)
-async def chat(request: ChatRequest):
+async def chat(request: ChatRequest, http_request: Request, user: dict = Depends(require_auth)):
     """
     Process a chat message and return SQL analysis results.
+    Requires authentication.
     
     Uses LangGraph workflow for:
     1. Preprocessing and normalization
@@ -56,7 +58,8 @@ async def chat(request: ChatRequest):
     7. LLM-based result summarization
     """
     start_time = time.time()
-    session_id = request.session_id or str(uuid.uuid4())
+    # Use user ID as part of session for per-user tracking
+    session_id = request.session_id or f"user_{user['id']}_{uuid.uuid4()}"
     message = request.message.strip()
     
     # Check if LLM is available
