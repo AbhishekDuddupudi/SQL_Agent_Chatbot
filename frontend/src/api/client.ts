@@ -5,6 +5,12 @@
 // Use relative URL for proxy, or absolute URL if VITE_API_URL is set
 const API_BASE_URL = import.meta.env.VITE_API_URL || ''
 
+function getSessionHeader(): Record<string, string> {
+  if (typeof window === 'undefined') return {}
+  const sessionId = window.localStorage.getItem('session_id')
+  return sessionId ? { 'X-Session-Id': sessionId } : {}
+}
+
 // ============ Auth Types ============
 
 export interface User {
@@ -21,19 +27,21 @@ export interface LoginRequest {
 export interface LoginResponse {
   success: boolean
   user: User | null
+  session_id?: string | null
   message: string
 }
 
 // ============ Chat Types ============
 
 export interface ChatRequest {
-  session_id?: string
+  session_id?: number  // Database session ID (integer)
   message: string
 }
 
 export interface ChatMetadata {
   row_count: number
   runtime_ms: number
+  session_id?: number  // Return session_id in metadata
 }
 
 export interface ChartSpec {
@@ -49,6 +57,25 @@ export interface ChatResponse {
   metadata: ChatMetadata
 }
 
+// ============ Session Types ============
+
+export interface ChatSession {
+  id: number
+  user_id: number
+  title: string | null
+  created_at: string
+  updated_at: string
+}
+
+export interface ChatMessage {
+  id: number
+  session_id: number
+  role: 'user' | 'assistant'
+  content: string
+  sql_query: string | null
+  created_at: string
+}
+
 export interface HealthResponse {
   status: string
 }
@@ -56,7 +83,13 @@ export interface HealthResponse {
 /**
  * SSE Event Types
  */
-export type StreamEventType = 'status' | 'token' | 'complete' | 'error'
+export type StreamEventType = 'session' | 'status' | 'token' | 'complete' | 'error'
+
+export interface StreamSessionEvent {
+  request_id: string
+  timestamp: number
+  session_id: number
+}
 
 export interface StreamStatusEvent {
   request_id: string
@@ -89,6 +122,7 @@ export interface StreamErrorEvent {
 }
 
 export type StreamEvent = 
+  | { type: 'session'; data: StreamSessionEvent }
   | { type: 'status'; data: StreamStatusEvent }
   | { type: 'token'; data: StreamTokenEvent }
   | { type: 'complete'; data: StreamCompleteEvent }
@@ -98,6 +132,7 @@ export type StreamEvent =
  * Callbacks for streaming events
  */
 export interface StreamCallbacks {
+  onSession?: (sessionId: number) => void
   onStatus?: (step: string, message: string) => void
   onToken?: (token: string) => void
   onComplete?: (response: ChatResponse) => void
@@ -138,7 +173,11 @@ export async function login(email: string, password: string): Promise<LoginRespo
     throw new Error(`Login failed: ${response.statusText}`)
   }
 
-  return response.json()
+  const data = await response.json()
+  if (data?.session_id && typeof window !== 'undefined') {
+    window.localStorage.setItem('session_id', data.session_id)
+  }
+  return data
 }
 
 /**
@@ -148,10 +187,16 @@ export async function logout(): Promise<void> {
   const response = await fetch(`${API_BASE_URL}/api/auth/logout`, {
     method: 'POST',
     credentials: 'include',
+    headers: {
+      ...getSessionHeader(),
+    },
   })
 
   if (!response.ok) {
     throw new Error(`Logout failed: ${response.statusText}`)
+  }
+  if (typeof window !== 'undefined') {
+    window.localStorage.removeItem('session_id')
   }
 }
 
@@ -161,6 +206,9 @@ export async function logout(): Promise<void> {
 export async function getCurrentUser(): Promise<User | null> {
   const response = await fetch(`${API_BASE_URL}/api/auth/me`, {
     credentials: 'include',
+    headers: {
+      ...getSessionHeader(),
+    },
   })
 
   if (!response.ok) {
@@ -177,7 +225,7 @@ export async function getCurrentUser(): Promise<User | null> {
  * Send a chat message and get a response (non-streaming)
  */
 export async function chatApi(
-  sessionId: string,
+  sessionId: number | undefined,
   message: string
 ): Promise<ChatResponse> {
   const request: ChatRequest = {
@@ -189,6 +237,7 @@ export async function chatApi(
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
+      ...getSessionHeader(),
     },
     credentials: 'include', // Important: include cookies for auth
     body: JSON.stringify(request),
@@ -238,7 +287,7 @@ function parseSSEEvent(eventText: string): StreamEvent | null {
  * Send a chat message with streaming response (SSE)
  */
 export async function chatApiStream(
-  sessionId: string,
+  sessionId: number | undefined,
   message: string,
   callbacks: StreamCallbacks
 ): Promise<void> {
@@ -252,6 +301,7 @@ export async function chatApiStream(
     headers: {
       'Content-Type': 'application/json',
       'Accept': 'text/event-stream',
+      ...getSessionHeader(),
     },
     credentials: 'include', // Important: include cookies for auth
     body: JSON.stringify(request),
@@ -294,6 +344,9 @@ export async function chatApiStream(
         if (!event) continue
 
         switch (event.type) {
+          case 'session':
+            callbacks.onSession?.(event.data.session_id)
+            break
           case 'status':
             callbacks.onStatus?.(event.data.step, event.data.message)
             break
@@ -321,6 +374,76 @@ export async function chatApiStream(
   }
 }
 
+// ============ Session API ============
+
+/**
+ * Get all chat sessions for the current user
+ */
+export async function getSessions(): Promise<ChatSession[]> {
+  const response = await fetch(`${API_BASE_URL}/api/sessions`, {
+    credentials: 'include',
+    headers: {
+      ...getSessionHeader(),
+    },
+  })
+
+  if (!response.ok) {
+    if (response.status === 401) {
+      throw new Error('Not authenticated')
+    }
+    throw new Error(`Failed to fetch sessions: ${response.statusText}`)
+  }
+
+  return response.json()
+}
+
+/**
+ * Create a new chat session
+ */
+export async function createSession(): Promise<ChatSession> {
+  const response = await fetch(`${API_BASE_URL}/api/sessions`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      ...getSessionHeader(),
+    },
+    credentials: 'include',
+  })
+
+  if (!response.ok) {
+    if (response.status === 401) {
+      throw new Error('Not authenticated')
+    }
+    throw new Error(`Failed to create session: ${response.statusText}`)
+  }
+
+  return response.json()
+}
+
+/**
+ * Get messages for a specific session
+ */
+export async function getSessionMessages(sessionId: number): Promise<ChatMessage[]> {
+  const response = await fetch(`${API_BASE_URL}/api/sessions/${sessionId}/messages`, {
+    credentials: 'include',
+    headers: {
+      ...getSessionHeader(),
+    },
+  })
+
+  if (!response.ok) {
+    if (response.status === 401) {
+      throw new Error('Not authenticated')
+    }
+    if (response.status === 404) {
+      throw new Error('Session not found')
+    }
+    throw new Error(`Failed to fetch messages: ${response.statusText}`)
+  }
+
+  return response.json()
+}
+
 export default {
   healthCheck,
   login,
@@ -328,4 +451,7 @@ export default {
   getCurrentUser,
   chatApi,
   chatApiStream,
+  getSessions,
+  createSession,
+  getSessionMessages,
 }

@@ -20,7 +20,7 @@ router = APIRouter()
 
 
 class StreamChatRequest(BaseModel):
-    session_id: Optional[str] = None
+    session_id: Optional[int] = None  # Database session ID (integer)
     message: str
 
 
@@ -39,6 +39,22 @@ def format_sse_event(event_type: str, data: Dict[str, Any], request_id: str) -> 
         **data
     }
     return f"event: {event_type}\ndata: {json.dumps(payload)}\n\n"
+
+
+def build_conversation_context(session_id: int) -> str:
+    """Build conversation context from recent messages."""
+    from app.services.chat_history import get_recent_messages
+    
+    recent_messages = get_recent_messages(session_id, limit=5)
+    if not recent_messages:
+        return ""
+    
+    context_lines = []
+    for msg in recent_messages:
+        role_label = "User" if msg["role"] == "user" else "Assistant"
+        context_lines.append(f"{role_label}: {msg['content']}")
+    
+    return "\n\n".join(context_lines)
 
 
 class StreamingWorkflowRunner:
@@ -93,7 +109,8 @@ class StreamingWorkflowRunner:
     async def run_workflow_streaming(
         self, 
         session_id: str, 
-        user_question: str
+        user_question: str,
+        conversation_context: str = ""
     ) -> Dict[str, Any]:
         """
         Run the workflow with status callbacks for streaming.
@@ -372,7 +389,8 @@ Please provide a concise, business-friendly summary of these results.
 
 
 async def stream_chat_response(
-    session_id: str,
+    session_id: int,
+    user_id: int,
     message: str,
     request_id: str
 ) -> AsyncGenerator[str, None]:
@@ -380,14 +398,29 @@ async def stream_chat_response(
     Generator that yields SSE events for the chat response.
     """
     from app.audit.repo import insert_audit_log
+    from app.services.chat_history import (
+        add_message, 
+        should_auto_title, 
+        auto_title_session
+    )
     
     runner = StreamingWorkflowRunner(request_id)
     start_time = time.time()
     
+    # Store user message
+    add_message(session_id, "user", message)
+    
+    # Auto-title on first user message
+    if should_auto_title(session_id):
+        auto_title_session(session_id, message)
+    
+    # Build conversation context for memory
+    conversation_context = build_conversation_context(session_id)
+    
     try:
         # Run workflow in a separate task so we can yield events
         workflow_task = asyncio.create_task(
-            runner.run_workflow_streaming(session_id, message)
+            runner.run_workflow_streaming(str(session_id), message, conversation_context)
         )
         
         # Yield events as they come in
@@ -410,6 +443,14 @@ async def stream_chat_response(
         # Get final result
         result = await workflow_task
         
+        # Store assistant response
+        add_message(
+            session_id, 
+            "assistant", 
+            result.get("answer", ""),
+            sql_query=result.get("sql_candidate")
+        )
+        
         # Emit complete event
         runner.emit_complete(result)
         yield runner.events.get_nowait()
@@ -417,7 +458,7 @@ async def stream_chat_response(
         # Log to audit
         runtime_ms = int((time.time() - start_time) * 1000)
         insert_audit_log(
-            session_id=session_id,
+            session_id=str(session_id),
             question=message,
             sql_text=result.get("sql_candidate"),
             runtime_ms=runtime_ms,
@@ -435,7 +476,7 @@ async def stream_chat_response(
         # Log error to audit
         runtime_ms = int((time.time() - start_time) * 1000)
         insert_audit_log(
-            session_id=session_id,
+            session_id=str(session_id),
             question=message,
             sql_text=None,
             runtime_ms=runtime_ms,
@@ -458,10 +499,11 @@ async def chat_stream(request: StreamChatRequest, http_request: Request, user: d
     
     All events include request_id for debugging.
     """
-    # Use user ID as part of session for per-user tracking
-    session_id = request.session_id or f"user_{user['id']}_{uuid.uuid4()}"
+    from app.services.chat_history import create_session, get_session
+    
     request_id = str(uuid.uuid4())
     message = request.message.strip()
+    user_id = user['id']
     
     if not message:
         async def error_stream():
@@ -479,8 +521,40 @@ async def chat_stream(request: StreamChatRequest, http_request: Request, user: d
             }
         )
     
+    # Get or create session
+    session_id = request.session_id
+    if session_id:
+        # Verify session belongs to user
+        session = get_session(session_id)
+        if not session or session["user_id"] != user_id:
+            async def error_stream():
+                yield format_sse_event(EVENT_ERROR, {
+                    "error": "Session not found or access denied"
+                }, request_id)
+            
+            return StreamingResponse(
+                error_stream(),
+                media_type="text/event-stream",
+                headers={
+                    "Cache-Control": "no-cache",
+                    "Connection": "keep-alive",
+                    "X-Accel-Buffering": "no"
+                }
+            )
+    else:
+        # Create new session
+        new_session = create_session(user_id)
+        session_id = new_session["id"]
+    
+    async def stream_with_session_id():
+        """Wrap stream to include session_id in first event."""
+        # Send session_id as first event so frontend knows which session to use
+        yield format_sse_event("session", {"session_id": session_id}, request_id)
+        async for event in stream_chat_response(session_id, user_id, message, request_id):
+            yield event
+    
     return StreamingResponse(
-        stream_chat_response(session_id, message, request_id),
+        stream_with_session_id(),
         media_type="text/event-stream",
         headers={
             "Cache-Control": "no-cache",

@@ -11,6 +11,7 @@ class AgentState(TypedDict):
     # Input
     session_id: str
     user_question: str
+    conversation_context: str  # Recent messages for memory
     
     # Preprocessing
     normalized_question: str
@@ -576,13 +577,14 @@ def get_workflow():
     return _compiled_workflow
 
 
-def run_agent(session_id: str, user_question: str) -> Dict[str, Any]:
+def run_agent(session_id: str, user_question: str, conversation_context: str = "") -> Dict[str, Any]:
     """
     Run the agent workflow.
     
     Args:
         session_id: Session identifier
         user_question: User's natural language question
+        conversation_context: Recent messages for memory (optional)
         
     Returns:
         Final agent state with results
@@ -592,6 +594,7 @@ def run_agent(session_id: str, user_question: str) -> Dict[str, Any]:
     initial_state: AgentState = {
         "session_id": session_id,
         "user_question": user_question,
+        "conversation_context": conversation_context,
         "normalized_question": "",
         "ambiguity_flag": False,
         "follow_up_questions": [],

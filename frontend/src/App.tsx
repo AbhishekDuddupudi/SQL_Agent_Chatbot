@@ -1,5 +1,15 @@
-import React, { useState, useRef, useEffect } from 'react'
-import { chatApiStream, getCurrentUser, logout, type ChatResponse, type User } from './api/client'
+import React, { useState, useRef, useEffect, useCallback } from 'react'
+import { 
+  chatApiStream, 
+  getCurrentUser, 
+  logout, 
+  getSessions,
+  getSessionMessages,
+  type ChatResponse, 
+  type User,
+  type ChatSession,
+  type ChatMessage 
+} from './api/client'
 import embed from 'vega-embed'
 import LoginPage from './LoginPage'
 
@@ -198,14 +208,46 @@ function App() {
   const [user, setUser] = useState<User | null>(null)
   const [authLoading, setAuthLoading] = useState(true)
   
+  // Session state
+  const [sessions, setSessions] = useState<ChatSession[]>([])
+  const [activeSessionId, setActiveSessionId] = useState<number | undefined>(undefined)
+  const [sidebarOpen, setSidebarOpen] = useState(true)
+  
   // Chat state
   const [messages, setMessages] = useState<Message[]>([])
   const [input, setInput] = useState('')
   const [isLoading, setIsLoading] = useState(false)
-  const [sessionId] = useState(() => crypto.randomUUID())
   const [expandedSql, setExpandedSql] = useState<string | null>(null)
   const [expandedChart, setExpandedChart] = useState<string | null>(null)
   const messagesEndRef = useRef<HTMLDivElement>(null)
+
+  // Load sessions when user logs in
+  const loadSessions = useCallback(async () => {
+    try {
+      const userSessions = await getSessions()
+      setSessions(userSessions)
+    } catch (err) {
+      console.error('Failed to load sessions:', err)
+    }
+  }, [])
+
+  // Load messages for a session
+  const loadSessionMessages = useCallback(async (sessionId: number) => {
+    try {
+      const chatMessages = await getSessionMessages(sessionId)
+      // Convert ChatMessage to Message format
+      const convertedMessages: Message[] = chatMessages.map((msg: ChatMessage) => ({
+        id: String(msg.id),
+        role: msg.role,
+        content: msg.content,
+        sql: msg.sql_query,
+      }))
+      setMessages(convertedMessages)
+    } catch (err) {
+      console.error('Failed to load messages:', err)
+      setMessages([])
+    }
+  }, [])
 
   // Check for existing session on mount
   useEffect(() => {
@@ -213,6 +255,9 @@ function App() {
       try {
         const currentUser = await getCurrentUser()
         setUser(currentUser)
+        if (currentUser) {
+          await loadSessions()
+        }
       } catch (err) {
         console.error('Auth check failed:', err)
       } finally {
@@ -220,7 +265,7 @@ function App() {
       }
     }
     checkAuth()
-  }, [])
+  }, [loadSessions])
 
   const scrollToBottom = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' })
@@ -235,9 +280,27 @@ function App() {
       await logout()
       setUser(null)
       setMessages([])
+      setSessions([])
+      setActiveSessionId(undefined)
     } catch (err) {
       console.error('Logout failed:', err)
     }
+  }
+
+  // Start new chat
+  const handleNewChat = () => {
+    setActiveSessionId(undefined)
+    setMessages([])
+    setExpandedSql(null)
+    setExpandedChart(null)
+  }
+
+  // Switch to a session
+  const handleSelectSession = async (sessionId: number) => {
+    setActiveSessionId(sessionId)
+    setExpandedSql(null)
+    setExpandedChart(null)
+    await loadSessionMessages(sessionId)
   }
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -267,9 +330,15 @@ function App() {
 
     try {
       await chatApiStream(
-        sessionId,
+        activeSessionId,
         userMessage.content,
         {
+          onSession: (newSessionId) => {
+            // Got session ID from server (for new sessions)
+            setActiveSessionId(newSessionId)
+            // Reload sessions to get new session in sidebar
+            loadSessions()
+          },
           onStatus: (_step, message) => {
             setMessages((prev) =>
               prev.map((m) =>
@@ -306,6 +375,8 @@ function App() {
                   : m
               )
             )
+            // Reload sessions to get updated title
+            loadSessions()
           },
           onError: (error) => {
             setMessages((prev) =>
@@ -324,12 +395,26 @@ function App() {
         }
       )
     } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : 'Unknown error'
+      
+      // If not authenticated, log out and redirect to login
+      if (errorMessage === 'Not authenticated') {
+        setUser(null)
+        setMessages([])
+        setSessions([])
+        setActiveSessionId(undefined)
+        if (typeof window !== 'undefined') {
+          window.localStorage.removeItem('session_id')
+        }
+        return
+      }
+      
       setMessages((prev) =>
         prev.map((m) =>
           m.id === assistantMessageId
             ? {
                 ...m,
-                content: 'Sorry, something went wrong. Please try again.',
+                content: `Error: ${errorMessage}`,
                 isStreaming: false,
                 statusMessage: undefined,
               }
@@ -353,6 +438,12 @@ function App() {
     setExpandedChart(expandedChart === messageId ? null : messageId)
   }
 
+  // Handle successful login
+  const handleLoginSuccess = useCallback(async (loggedInUser: User) => {
+    setUser(loggedInUser)
+    await loadSessions()
+  }, [loadSessions])
+
   // Show loading while checking auth
   if (authLoading) {
     return (
@@ -364,45 +455,93 @@ function App() {
 
   // Show login page if not authenticated
   if (!user) {
-    return <LoginPage onLoginSuccess={setUser} />
+    return <LoginPage onLoginSuccess={handleLoginSuccess} />
   }
 
   return (
-    <div style={styles.container}>
-      <header style={styles.header}>
-        <div style={styles.headerContent}>
-          <div>
-            <h1 style={styles.title}>🧬 Pharma Analyst Bot</h1>
-            <p style={styles.subtitle}>Ask questions about pharmaceutical sales data</p>
-          </div>
-          <div style={styles.userInfo}>
-            <span style={styles.userName}>👤 {user.display_name}</span>
-            <button onClick={handleLogout} style={styles.logoutButton}>
-              Logout
-            </button>
-          </div>
-        </div>
-      </header>
-
-      <main style={styles.chatContainer}>
-        <div style={styles.messagesContainer}>
-          {messages.length === 0 && (
-            <div style={styles.welcomeMessage}>
-              <h2>Welcome! 👋</h2>
-              <p>Try asking questions like:</p>
-              <ul style={styles.exampleList}>
-                <li onClick={() => setInput('What are the top products by revenue?')}>
-                  "What are the top products by revenue?"
-                </li>
-                <li onClick={() => setInput('Show me revenue by territory')}>
-                  "Show me revenue by territory"
-                </li>
-                <li onClick={() => setInput('Show sales data')}>
-                  "Show sales data"
-                </li>
-              </ul>
+    <div style={styles.appWrapper}>
+      {/* Sidebar */}
+      <aside style={{
+        ...styles.sidebar,
+        width: sidebarOpen ? '260px' : '0',
+        padding: sidebarOpen ? '16px' : '0',
+      }}>
+        <button 
+          onClick={handleNewChat} 
+          style={styles.newChatButton}
+        >
+          + New Chat
+        </button>
+        
+        <div style={styles.sessionList}>
+          {sessions.map((session) => (
+            <div
+              key={session.id}
+              onClick={() => handleSelectSession(session.id)}
+              style={{
+                ...styles.sessionItem,
+                backgroundColor: activeSessionId === session.id ? '#e8f0fe' : 'transparent',
+                borderLeft: activeSessionId === session.id ? '3px solid #1a73e8' : '3px solid transparent',
+              }}
+            >
+              <span style={styles.sessionTitle}>
+                {session.title || 'New conversation'}
+              </span>
+              <span style={styles.sessionDate}>
+                {new Date(session.created_at).toLocaleDateString()}
+              </span>
             </div>
+          ))}
+          {sessions.length === 0 && (
+            <p style={styles.noSessions}>No conversations yet</p>
           )}
+        </div>
+      </aside>
+
+      {/* Main content */}
+      <div style={styles.mainContent}>
+        <header style={styles.header}>
+          <div style={styles.headerContent}>
+            <div style={styles.headerLeft}>
+              <button 
+                onClick={() => setSidebarOpen(!sidebarOpen)} 
+                style={styles.menuButton}
+              >
+                ☰
+              </button>
+              <div>
+                <h1 style={styles.title}>🧬 Pharma Analyst Bot</h1>
+                <p style={styles.subtitle}>Ask questions about pharmaceutical sales data</p>
+              </div>
+            </div>
+            <div style={styles.userInfo}>
+              <span style={styles.userName}>👤 {user.display_name}</span>
+              <button onClick={handleLogout} style={styles.logoutButton}>
+                Logout
+              </button>
+            </div>
+          </div>
+        </header>
+
+        <main style={styles.chatContainer}>
+          <div style={styles.messagesContainer}>
+            {messages.length === 0 && (
+              <div style={styles.welcomeMessage}>
+                <h2>Welcome! 👋</h2>
+                <p>Try asking questions like:</p>
+                <ul style={styles.exampleList}>
+                  <li onClick={() => setInput('What are the top products by revenue?')}>
+                    "What are the top products by revenue?"
+                  </li>
+                  <li onClick={() => setInput('Show me revenue by territory')}>
+                    "Show me revenue by territory"
+                  </li>
+                  <li onClick={() => setInput('Show sales data')}>
+                    "Show sales data"
+                  </li>
+                </ul>
+              </div>
+            )}
 
           {messages.map((message) => (
             <div
@@ -452,11 +591,78 @@ function App() {
           </button>
         </form>
       </main>
+      </div>
     </div>
   )
 }
 
 const styles: { [key: string]: React.CSSProperties } = {
+  appWrapper: {
+    minHeight: '100vh',
+    display: 'flex',
+    backgroundColor: '#f5f7fa',
+  },
+  sidebar: {
+    backgroundColor: '#ffffff',
+    borderRight: '1px solid #e5e7eb',
+    display: 'flex',
+    flexDirection: 'column',
+    transition: 'width 0.2s ease, padding 0.2s ease',
+    overflow: 'hidden',
+    flexShrink: 0,
+  },
+  newChatButton: {
+    padding: '12px 16px',
+    backgroundColor: '#1a73e8',
+    color: 'white',
+    border: 'none',
+    borderRadius: '8px',
+    fontSize: '14px',
+    fontWeight: 500,
+    cursor: 'pointer',
+    marginBottom: '16px',
+    whiteSpace: 'nowrap',
+  },
+  sessionList: {
+    flex: 1,
+    overflowY: 'auto',
+    display: 'flex',
+    flexDirection: 'column',
+    gap: '4px',
+  },
+  sessionItem: {
+    padding: '12px',
+    borderRadius: '6px',
+    cursor: 'pointer',
+    display: 'flex',
+    flexDirection: 'column',
+    gap: '4px',
+    transition: 'background-color 0.15s ease',
+  },
+  sessionTitle: {
+    fontSize: '14px',
+    fontWeight: 500,
+    color: '#333',
+    whiteSpace: 'nowrap',
+    overflow: 'hidden',
+    textOverflow: 'ellipsis',
+  },
+  sessionDate: {
+    fontSize: '11px',
+    color: '#888',
+  },
+  noSessions: {
+    fontSize: '13px',
+    color: '#888',
+    textAlign: 'center',
+    padding: '20px 0',
+  },
+  mainContent: {
+    flex: 1,
+    display: 'flex',
+    flexDirection: 'column',
+    minWidth: 0,
+  },
   container: {
     minHeight: '100vh',
     display: 'flex',
@@ -485,6 +691,20 @@ const styles: { [key: string]: React.CSSProperties } = {
     alignItems: 'center',
     maxWidth: '1200px',
     margin: '0 auto',
+  },
+  headerLeft: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: '12px',
+  },
+  menuButton: {
+    background: 'none',
+    border: 'none',
+    color: 'white',
+    fontSize: '20px',
+    cursor: 'pointer',
+    padding: '8px',
+    borderRadius: '4px',
   },
   title: {
     margin: 0,
